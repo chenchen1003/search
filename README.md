@@ -1,114 +1,91 @@
 # Local Knowledge Search
 
-Fully local semantic search over Markdown, CSV, JSON, plain-text, and **HTML** files.
-No cloud API. By default embeddings use a **project-local GGUF** at
-`models/Qwen3-Embedding-0.6B-Q8_0.gguf` (resolved relative to the `search` repo root, so the CLI works from any working directory). You can switch to a HuggingFace SentenceTransformer id via `EMBED_MODEL` in `.env`.
+Fully local semantic search over Markdown, CSV, JSON, plain-text, and HTML files.
+No cloud API required — embeddings and re-ranking run entirely on-device via GGUF models.
 
-## Setup
+## Quick Start
 
 ```bash
 pip install -r requirements.txt
 pip install -e .
-cp .env.example .env   # edit paths/model if needed
+cp .env.example .env        # review defaults, adjust paths if needed
+
+knowledge index ./my-notes  # index a folder
+knowledge search "query"    # search
 ```
 
-### Option A — GGUF + llama.cpp (recommended if HuggingFace / XetHub is blocked)
+## Models
 
-1. Download one ``*.gguf`` file from [Qwen/Qwen3-Embedding-0.6B-GGUF](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF) (e.g. Q8_0 — pick a file that fits your RAM).
+Place GGUF files in the `models/` folder (already in `.gitignore`):
 
-2. Install bindings (Apple Silicon — Metal acceleration):
+| File | Purpose |
+|------|---------|
+| `Qwen3-Embedding-0.6B-Q8_0.gguf` | Embeddings (required) |
+| `Qwen2.5-Coder-1.5B-Instruct-Q8_0.gguf` | Re-ranking LLM (optional, used with `--rerank`) |
 
-   ```bash
-   CMAKE_ARGS="-DLLAMA_METAL=on" pip install llama-cpp-python --force-reinstall --no-cache-dir
-   ```
+Download from HuggingFace:
+- [Qwen/Qwen3-Embedding-0.6B-GGUF](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF)
+- [Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF](https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF)
 
-   On other platforms, plain ``pip install llama-cpp-python`` is usually enough.
-
-3. Point the app at the file:
-
-   ```bash
-   export EMBED_MODEL=/absolute/path/to/your-model.gguf
-   # or add the same line to .env
-   knowledge index ./raw-data/index_meta.json
-   ```
-
-**Important:** If you previously indexed with the PyTorch / SentenceTransformer model, delete your Chroma folder (or use a new ``CHROMA_DIR``) before switching — vector dimensions must match.
-
-### Option B — PyTorch / SentenceTransformer (HuggingFace)
-
-The model (~1.2 GB) must be downloaded once before indexing or searching.
-If your network uses a corporate SSL proxy, export your system CA bundle first:
-
+**Apple Silicon:** Install llama-cpp-python with Metal acceleration:
 ```bash
-security export -t certs -f pemseq -k /Library/Keychains/System.keychain \
-    -o /tmp/system_certs.pem
-security export -t certs -f pemseq \
-    -k /System/Library/Keychains/SystemRootCertificates.keychain \
-    >> /tmp/system_certs.pem
-
-REQUESTS_CA_BUNDLE=/tmp/system_certs.pem \
-SSL_CERT_FILE=/tmp/system_certs.pem \
-HF_HUB_DISABLE_XET=1 python -c "
-from huggingface_hub import snapshot_download
-snapshot_download('Qwen/Qwen3-Embedding-0.6B')
-"
+CMAKE_ARGS="-DLLAMA_METAL=on" pip install llama-cpp-python --force-reinstall --no-cache-dir
 ```
 
-Then either keep ``EMBED_MODEL=Qwen/Qwen3-Embedding-0.6B`` (default) or pass ``--model`` on the CLI.
-
-### Environment tuning (GGUF only)
-
-| Variable | Default | Meaning |
-|----------|---------|---------|
-| ``KNOWLEDGE_LLAMA_N_CTX`` | ``8192`` | Context length (raise if long documents are truncated) |
-| ``KNOWLEDGE_LLAMA_N_GPU_LAYERS`` | ``-1`` | GPU layers (‑1 = all on Metal/CUDA; ``0`` = CPU only) |
-| ``KNOWLEDGE_LLAMA_VERBOSE`` | (off) | Set to ``1`` to show llama.cpp stderr (e.g. ``init: embeddings required…``); default hides that harmless spam |
+**Alternatively**, use a HuggingFace SentenceTransformer by setting `EMBED_MODEL=Qwen/Qwen3-Embedding-0.6B` in `.env` (requires internet for first download).
 
 ## CLI Usage
 
 ```bash
 knowledge index ./my-notes              # index a folder (md, txt, csv, json, html)
-knowledge search "query here"           # semantic search
-knowledge search "query" --top-k 10 --type md
-knowledge search "query" --rerank       # re-rank results with local LLM (slower, smarter)
-knowledge delete ./my-notes/old.md      # remove from index
+knowledge index ./notes/article.html    # index a single file
+
+knowledge search "query here"           # semantic search (default top 5)
+knowledge search "query" --top-k 10     # return more results
+knowledge search "query" --type md      # filter by file type
+knowledge search "query" --rerank       # re-rank with local LLM (slower, more accurate)
+
+knowledge delete ./my-notes/old.md      # remove a file from the index
 ```
 
 ## API Server
 
 ```bash
 python -m knowledge.api
-# Server runs at http://localhost:8000
+# Runs at http://localhost:8000
 ```
 
-Endpoints: `POST /index`, `POST /search`, `DELETE /document`, `GET /health`
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Health check |
+| `POST` | `/index` | Index a file or directory |
+| `POST` | `/search` | Semantic search |
+| `DELETE` | `/document` | Remove a file from the index |
 
-`POST /search` accepts `"rerank": true` to enable LLM re-ranking.
-
-## Models
-
-Place GGUF models in the `models/` folder:
-- `Qwen3-Embedding-0.6B-Q8_0.gguf` — embedding model (used by default)
-- `Qwen2.5-Coder-1.5B-Instruct-Q8_0.gguf` — re-ranking LLM (used with `--rerank`)
-
-Override via `.env`:
-```
-EMBED_MODEL=./models/Qwen3-Embedding-0.6B-Q8_0.gguf
-LLM_MODEL=./models/Qwen2.5-Coder-1.5B-Instruct-Q8_0.gguf
+`POST /search` body:
+```json
+{ "query": "rainy day hiking", "top_k": 5, "file_type": null, "rerank": false }
 ```
 
 ## Configuration
 
-All settings can be overridden via `.env` or environment variables:
+Copy `.env.example` to `.env` and edit as needed. All values can also be set as environment variables.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `EMBED_MODEL` | `models/Qwen3-Embedding-0.6B-Q8_0.gguf` | Embedding model (GGUF path or HF repo id) |
-| `LLM_MODEL` | `models/Qwen2.5-Coder-1.5B-Instruct-Q8_0.gguf` | Re-ranking LLM (GGUF path) |
-| `CHROMA_DIR` | `./chroma` (inside project folder) | ChromaDB storage path |
-| `CHUNK_SIZE` | `400` | Words per chunk (txt/html files) |
+| `EMBED_MODEL` | `models/Qwen3-Embedding-0.6B-Q8_0.gguf` | Embedding model — GGUF path or HF repo id |
+| `LLM_MODEL` | `models/Qwen2.5-Coder-1.5B-Instruct-Q8_0.gguf` | Re-ranking LLM — GGUF path |
+| `CHROMA_DIR` | `./chroma` | Vector DB storage — project-local by default |
+| `CHUNK_SIZE` | `400` | Words per chunk (txt, html) |
 | `CHUNK_OVERLAP` | `50` | Overlap between chunks |
 | `API_PORT` | `8000` | REST API port |
+
+To share a single index across projects, point `CHROMA_DIR` at a fixed location:
+```
+CHROMA_DIR=~/.local/share/knowledge/chroma
+```
+
+> **Note:** If you switch embedding models, delete or relocate `CHROMA_DIR` and re-index — vector dimensions must match.
 
 ## Supported File Types
 
@@ -118,12 +95,31 @@ All settings can be overridden via `.env` or environment variables:
 | `.md` | Split on `#` headings |
 | `.csv` | One chunk per row |
 | `.json` | One chunk per array item or object |
-| `.html` / `.htm` | Tag-stripped, then fixed-size word windows |
+| `.html` / `.htm` | Tags stripped, then fixed-size word windows |
 
-## Running Tests
+## Understanding Search Scores
+
+Scores are cosine similarity values (0–1). Raw embedding similarity is naturally modest:
+
+| Score | Meaning |
+|-------|---------|
+| 0.7+ | Near-identical or paraphrased content |
+| 0.4–0.7 | Clearly related topic |
+| 0.2–0.4 | Loosely related |
+| < 0.2 | Likely unrelated |
+
+ChromaDB always returns the requested `top_k` results regardless of score. Use `--rerank` to improve ordering when results feel mixed.
+
+## Tests
 
 ```bash
 pytest -v
-# Parser tests run immediately.
-# Embedding tests skip until Qwen3-Embedding-0.6B is downloaded.
+# Parser/reranker tests run immediately (no model needed).
+# Embedding/searcher tests are skipped if the GGUF model is not in models/.
 ```
+
+## Docs
+
+- [`docs/designs/`](docs/designs/) — architecture decisions
+- [`docs/plans/`](docs/plans/) — implementation plans
+- [`docs/archive/`](docs/archive/) — superseded earlier designs
