@@ -1,0 +1,14 @@
+search/
+# Large local embedding weights (keep path as convention; do not commit binaries)
+models/*.gguf
+# ChromaDB vector store (project-local default; override with CHROMA_DIR env var)
+chroma/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.egg-info/
+dist/
+build/
+.pytest_cache/
