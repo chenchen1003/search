@@ -43,7 +43,8 @@ knowledge index ./notes/article.html    # index a single file
 knowledge search "query here"           # semantic search (default top 5)
 knowledge search "query" --top-k 10     # return more results
 knowledge search "query" --type md      # filter by file type
-knowledge search "query" --rerank       # re-rank with local LLM (slower, more accurate)
+knowledge search "query" --no-hybrid    # pure vector search (faster, less precise)
+knowledge search "query" --rerank       # re-rank with local LLM (slower, most accurate)
 
 knowledge delete ./my-notes/old.md      # remove a file from the index
 ```
@@ -64,7 +65,7 @@ python -m knowledge.api
 
 `POST /search` body:
 ```json
-{ "query": "rainy day hiking", "top_k": 5, "file_type": null, "rerank": false }
+{ "query": "rainy day hiking", "top_k": 5, "file_type": null, "rerank": false, "hybrid": true }
 ```
 
 ## Configuration
@@ -97,18 +98,25 @@ CHROMA_DIR=~/.local/share/knowledge/chroma
 | `.json` | One chunk per array item or object |
 | `.html` / `.htm` | Tags stripped, then fixed-size word windows |
 
-## Understanding Search Scores
+## How Search Works
 
-Scores are cosine similarity values (0–1). Raw embedding similarity is naturally modest:
+Search runs in up to three stages:
 
-| Score | Meaning |
-|-------|---------|
-| 0.7+ | Near-identical or paraphrased content |
-| 0.4–0.7 | Clearly related topic |
-| 0.2–0.4 | Loosely related |
-| < 0.2 | Likely unrelated |
+1. **Vector retrieval** — cosine similarity against the ChromaDB embedding index (always on)
+2. **Hybrid re-rank** — combines vector rank with BM25 keyword score using Reciprocal Rank Fusion; on by default (`--no-hybrid` to skip)
+3. **LLM re-rank** — an on-device LLM scores each passage for relevance; opt-in with `--rerank`
 
-ChromaDB always returns the requested `top_k` results regardless of score. Use `--rerank` to improve ordering when results feel mixed.
+Hybrid mode significantly improves results for queries containing specific terms (product names, category codes, etc.) by ensuring exact keyword matches aren't buried by semantic similarity alone.
+
+### Score interpretation
+
+| Mode | Score meaning |
+|------|--------------|
+| `--no-hybrid` | Raw cosine similarity (0–1); ~0.65 is a strong match |
+| default (hybrid) | RRF-normalised (0–1); top result is always 1.0 |
+| `--rerank` | LLM relevance score normalised to 0–1 |
+
+ChromaDB always returns the requested `top_k` results regardless of score. Use `--rerank` when ordering matters most and you can afford the extra latency.
 
 ## Tests
 

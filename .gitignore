@@ -1,4 +1,3 @@
-search/
 # Large local embedding weights (keep path as convention; do not commit binaries)
 models/*.gguf
 # ChromaDB vector store (project-local default; override with CHROMA_DIR env var)

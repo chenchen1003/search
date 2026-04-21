@@ -33,12 +33,13 @@ def search(
     top_k: int = typer.Option(5, "--top-k", help="Number of results"),
     file_type: Optional[str] = typer.Option(None, "--type", help="Filter by file type"),
     rerank: bool = typer.Option(False, "--rerank/--no-rerank", help="Re-rank results with local LLM"),
+    hybrid: bool = typer.Option(True, "--hybrid/--no-hybrid", help="Combine vector + BM25 keyword scoring (default: on)"),
     chroma_dir: Path = typer.Option(settings.chroma_dir, help="ChromaDB storage path"),
     model: str = typer.Option(settings.embed_model, help="Embedding model name"),
 ) -> None:
     """Semantic search over indexed files."""
     searcher = _make_searcher(chroma_dir, model)
-    results = searcher.search(query, top_k=top_k, file_type=file_type, rerank=rerank)
+    results = searcher.search(query, top_k=top_k, file_type=file_type, rerank=rerank, hybrid=hybrid)
     if not results:
         typer.echo("No results found.")
         return
