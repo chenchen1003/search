@@ -22,11 +22,24 @@ def index(
     path: Path = typer.Argument(..., help="File or directory to index"),
     chroma_dir: Path = typer.Option(settings.chroma_dir, help="ChromaDB storage path"),
     model: str = typer.Option(settings.embed_model, help="Embedding model name"),
+    update_wiki: bool = typer.Option(False, "--update-wiki", help="Regenerate domain wiki after indexing (requires LLM)"),
 ) -> None:
     """Index a file or directory."""
     searcher = _make_searcher(chroma_dir, model)
     total = searcher.index_path(path)
     typer.echo(f"Indexed {total} chunk(s) from {path}")
+
+    if update_wiki:
+        typer.echo("Regenerating domain wiki...")
+        try:
+            content = searcher.generate_wiki()
+            typer.echo(f"Wiki updated at {settings.domain_wiki_path}")
+        except (RuntimeError, FileNotFoundError) as e:
+            typer.echo(f"Warning: wiki generation failed — {e}", err=True)
+    elif settings.domain_wiki_path.exists():
+        typer.echo(
+            f"Tip: domain wiki may be outdated. Run `knowledge wiki generate` to refresh it."
+        )
 
 
 @app.command()
