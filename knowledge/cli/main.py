@@ -131,5 +131,35 @@ def wiki_path_cmd(
     typer.echo(wiki_path)
 
 
+@wiki_app.command("check")
+def wiki_check(
+    query: str = typer.Argument(..., help="Query to test against the domain wiki"),
+    chroma_dir: Path = typer.Option(settings.chroma_dir, help="ChromaDB storage path"),
+    model: str = typer.Option(settings.embed_model, help="Embedding model name"),
+    wiki_path: Path = typer.Option(settings.domain_wiki_path, help="Path to domain wiki"),
+    threshold: float = typer.Option(settings.intent_threshold, "--threshold", help="Intent threshold (default from config)"),
+) -> None:
+    """Check whether a query matches the domain wiki (intent gate dry-run)."""
+    if not wiki_path.exists():
+        typer.echo(f"No domain wiki found at {wiki_path}. Run: knowledge wiki generate", err=True)
+        raise typer.Exit(1)
+
+    searcher = Searcher(
+        chroma_dir=chroma_dir, embed_model=model,
+        wiki_path=wiki_path,
+        emb_cache_path=wiki_path.parent / "domain_emb.json",
+        intent_threshold=threshold,
+    )
+    score = searcher._intent_score(query)
+    passed = score >= threshold
+
+    status = typer.style("PASS", fg=typer.colors.GREEN, bold=True) if passed else typer.style("BLOCK", fg=typer.colors.RED, bold=True)
+    typer.echo(f"{status}  score={score:.3f}  threshold={threshold}  query={query!r}")
+    if not passed:
+        typer.echo(f"  → Query is outside the domain. Search would return no results.")
+    else:
+        typer.echo(f"  → Query is within the domain. Search will proceed normally.")
+
+
 if __name__ == "__main__":
     app()
