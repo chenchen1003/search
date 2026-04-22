@@ -6,7 +6,14 @@ from knowledge.core.searcher import Searcher, SearchResult
 
 @pytest.fixture
 def searcher(tmp_path):
-    return Searcher(chroma_dir=tmp_path, embed_model=EMBED_MODEL)
+    # Point wiki_path at a non-existent file so the intent gate is skipped,
+    # allowing tests to search arbitrary content without domain restrictions.
+    return Searcher(
+        chroma_dir=tmp_path,
+        embed_model=EMBED_MODEL,
+        wiki_path=tmp_path / "domain.md",
+        emb_cache_path=tmp_path / "domain_emb.json",
+    )
 
 
 @requires_embed_model

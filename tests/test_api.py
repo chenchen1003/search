@@ -7,7 +7,12 @@ from conftest import requires_embed_model, EMBED_MODEL
 @pytest.fixture
 def client(tmp_path):
     from knowledge.api.server import create_app
-    return TestClient(create_app(chroma_dir=tmp_path / "chroma", embed_model=EMBED_MODEL))
+    return TestClient(create_app(
+        chroma_dir=tmp_path / "chroma",
+        embed_model=EMBED_MODEL,
+        wiki_path=tmp_path / "domain.md",       # non-existent → intent gate skipped
+        emb_cache_path=tmp_path / "domain_emb.json",
+    ))
 
 
 def test_health(tmp_path):

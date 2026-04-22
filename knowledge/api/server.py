@@ -45,8 +45,18 @@ class DeleteResponse(BaseModel):
     deleted: int
 
 
-def create_app(chroma_dir: Path, embed_model: str) -> FastAPI:
-    searcher = Searcher(chroma_dir=chroma_dir, embed_model=embed_model)
+def create_app(
+    chroma_dir: Path,
+    embed_model: str,
+    wiki_path: Path | None = None,
+    emb_cache_path: Path | None = None,
+) -> FastAPI:
+    searcher = Searcher(
+        chroma_dir=chroma_dir,
+        embed_model=embed_model,
+        wiki_path=wiki_path,
+        emb_cache_path=emb_cache_path,
+    )
     api = FastAPI(title="Local Knowledge Search", version="0.2.0")
 
     @api.get("/health")
@@ -80,5 +90,5 @@ def create_app(chroma_dir: Path, embed_model: str) -> FastAPI:
 
 def run(chroma_dir: Path, embed_model: str, port: int = 8000) -> None:
     import uvicorn
-    app = create_app(chroma_dir=chroma_dir, embed_model=embed_model)
+    app = create_app(chroma_dir=chroma_dir, embed_model=embed_model)  # uses settings defaults
     uvicorn.run(app, host="0.0.0.0", port=port)

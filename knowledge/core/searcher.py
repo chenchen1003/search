@@ -73,9 +73,8 @@ class Searcher:
     ) -> None:
         self._index = VectorIndex(chroma_dir=chroma_dir, embed_model=embed_model)
         self._llm_model = llm_model or settings.llm_model
-        chroma_dir = Path(chroma_dir)
-        self._wiki_path = wiki_path or (chroma_dir / "domain.md")
-        self._emb_cache_path = emb_cache_path or (chroma_dir / "domain_emb.json")
+        self._wiki_path = Path(wiki_path) if wiki_path else settings.domain_wiki_path
+        self._emb_cache_path = Path(emb_cache_path) if emb_cache_path else settings.domain_emb_path
         self._intent_threshold = intent_threshold if intent_threshold is not None else settings.intent_threshold
 
     def index_path(self, path: Path) -> int:
