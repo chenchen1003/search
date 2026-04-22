@@ -131,6 +131,53 @@ def wiki_path_cmd(
     typer.echo(wiki_path)
 
 
+@wiki_app.command("validate")
+def wiki_validate(
+    chroma_dir: Path = typer.Option(settings.chroma_dir, help="ChromaDB storage path"),
+    model: str = typer.Option(settings.embed_model, help="Embedding model name"),
+    wiki_path: Path = typer.Option(settings.domain_wiki_path, help="Path to domain wiki"),
+) -> None:
+    """Validate the domain wiki: show the block list and detect section conflicts.
+
+    Conflicts occur when a term appears in both 'Answerable queries' and 'Not
+    answerable' — those terms will incorrectly block legitimate queries.
+    Remove them from the 'Not answerable' section to fix.
+    """
+    if not wiki_path.exists():
+        typer.echo(f"No domain wiki found at {wiki_path}. Run: knowledge wiki generate", err=True)
+        raise typer.Exit(1)
+
+    from knowledge.core.domain_wiki import DomainWiki
+    import json as _json
+
+    # Delete cache to force a fresh analysis from the current wiki file
+    emb_cache = wiki_path.parent / "domain_emb.json"
+    if emb_cache.exists():
+        emb_cache.unlink()
+
+    searcher = Searcher(chroma_dir=chroma_dir, embed_model=model,
+                        wiki_path=wiki_path, emb_cache_path=emb_cache)
+    wiki = DomainWiki(wiki_path, emb_cache)
+    report = wiki.validate(searcher._index.embedder)
+
+    typer.echo(f"\nBlocked keywords ({len(report['blocked_keywords'])}):")
+    for kw in report["blocked_keywords"]:
+        typer.echo(f"  {kw}")
+
+    if report["conflicts"]:
+        typer.echo(
+            "\n" + typer.style("CONFLICTS DETECTED", fg=typer.colors.RED, bold=True)
+            + f" ({len(report['conflicts'])} term(s) appear in BOTH sections"
+            " and will wrongly block legitimate queries):"
+        )
+        for kw in report["conflicts"]:
+            typer.echo(f"  {typer.style(kw, fg=typer.colors.RED)}  ← remove from 'Not answerable'")
+        raise typer.Exit(1)
+    else:
+        typer.echo("\n" + typer.style("OK", fg=typer.colors.GREEN, bold=True)
+                   + " — no conflicts detected.")
+
+
 @wiki_app.command("check")
 def wiki_check(
     query: str = typer.Argument(..., help="Query to test against the domain wiki"),

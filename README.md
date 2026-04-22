@@ -86,8 +86,21 @@ The domain wiki is a short markdown file (`domain-data/domain.md`) that describe
 knowledge wiki generate             # sample index → LLM → save domain-data/domain.md
 knowledge wiki show                 # print the current wiki
 knowledge wiki path                 # print the file path (useful for shell scripting)
+knowledge wiki validate             # audit the block list and detect section conflicts
 knowledge wiki check "query here"   # dry-run: show intent score and PASS/BLOCK verdict
 knowledge wiki check "query" --threshold 0.3   # test with a custom threshold
+```
+
+### Avoiding false blocks
+
+The keyword gate extracts terms from the **"Not answerable"** section and blocks any query that contains them. A common mistake is mentioning the **same brand in both sections** — for example, writing "食品等与 Nike 运动无关的品类" in "Not answerable" when Nike is already listed in "Answerable queries". That causes `Nike` to be added to the block list, silently breaking all Nike searches.
+
+Run `knowledge wiki validate` after editing the wiki to catch this before it affects searches. It shows the full block list and flags any terms that appear in both sections:
+
+```
+CONFLICTS DETECTED (2 term(s) appear in BOTH sections and will wrongly block legitimate queries):
+  jordan  ← remove from 'Not answerable'
+  nike    ← remove from 'Not answerable'
 ```
 
 After generating, you can **edit `domain-data/domain.md` by hand** to improve accuracy. Changes take effect immediately — the embedding cache (`domain-data/domain_emb.json`) is automatically invalidated when the file is saved via the CLI.

@@ -66,6 +66,19 @@ def _extract_keywords(text: str) -> list[str]:
     return sorted(tokens)
 
 
+def _warn_conflicts(conflicts: list[str], wiki_path: Path) -> None:
+    """Emit a warning for terms that appear in both wiki sections."""
+    logger.warning(
+        "Domain wiki conflict detected in %s: the following terms appear in both "
+        "'Answerable queries' AND 'Not answerable' sections, so queries containing "
+        "them will be wrongly blocked: %s. "
+        "Remove them from the 'Not answerable' section and run "
+        "`knowledge wiki check-conflicts` to verify.",
+        wiki_path,
+        conflicts,
+    )
+
+
 def _query_contains_keyword(query: str, keywords: list[str]) -> bool:
     """Return True if the query contains any of the blocked keywords."""
     query_lower = query.lower()
@@ -177,8 +190,7 @@ class DomainWiki:
         if self.emb_cache_path.exists():
             try:
                 data = json.loads(self.emb_cache_path.read_text(encoding="utf-8"))
-                # Accept both old format (plain list) and new format (dict with sections)
-                if isinstance(data, dict) and "answerable" in data:
+                if isinstance(data, dict) and "blocked_keywords" in data:
                     return data
             except Exception:
                 pass
@@ -190,24 +202,54 @@ class DomainWiki:
         Cache format::
 
             {
-              "wiki": [...],           # full wiki vector
-              "blocked_keywords": [...] # lowercase terms from "Not answerable" section
+              "wiki": [...],             # full wiki vector
+              "blocked_keywords": [...], # terms from "Not answerable" section
+              "conflicts": [...]         # terms that appear in BOTH sections (warning)
             }
         """
         cached = self._load_cache()
         if cached:
+            # Surface any cached conflicts on every load so they're never silently ignored
+            if cached.get("conflicts"):
+                _warn_conflicts(cached["conflicts"], self.wiki_path)
             return cached
 
         wiki_text = self.load()
-        _, not_answerable_text = self._parse_sections(wiki_text)
+        answerable_text, not_answerable_text = self._parse_sections(wiki_text)
 
         wiki_vec = embedder.embed([wiki_text])[0]
         blocked = _extract_keywords(not_answerable_text)
+        answerable_kw = set(_extract_keywords(answerable_text))
 
-        cache = {"wiki": wiki_vec, "blocked_keywords": blocked}
+        # Detect terms that appear in both sections — these will incorrectly block
+        # legitimate queries (the bug we hit with "Nike" appearing in Not answerable).
+        conflicts = sorted(set(blocked) & answerable_kw)
+        if conflicts:
+            _warn_conflicts(conflicts, self.wiki_path)
+
+        cache = {"wiki": wiki_vec, "blocked_keywords": blocked, "conflicts": conflicts}
         self.emb_cache_path.parent.mkdir(parents=True, exist_ok=True)
         self.emb_cache_path.write_text(json.dumps(cache), encoding="utf-8")
         return cache
+
+    # ------------------------------------------------------------------
+    # Validation
+    # ------------------------------------------------------------------
+
+    def validate(self, embedder: Embedder) -> dict:
+        """Return a validation report without running a full search.
+
+        Reports:
+        - ``blocked_keywords``: the full block list derived from "Not answerable"
+        - ``conflicts``: terms that appear in both sections (will wrongly block queries)
+        - ``ok``: True when there are no conflicts
+        """
+        cache = self.get_embedding(embedder)
+        return {
+            "blocked_keywords": cache.get("blocked_keywords", []),
+            "conflicts": cache.get("conflicts", []),
+            "ok": len(cache.get("conflicts", [])) == 0,
+        }
 
     # ------------------------------------------------------------------
     # Intent check
