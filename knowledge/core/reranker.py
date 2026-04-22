@@ -31,14 +31,21 @@ class Reranker:
         path = Path(self._model_path)
         if not path.exists():
             raise FileNotFoundError(f"LLM model not found: {self._model_path}")
-        from llama_cpp import Llama
         import os
-        self._llm = Llama(
-            model_path=str(path),
-            n_ctx=2048,
-            n_threads=4,
-            verbose=False,
-        )
+        import sys
+        from llama_cpp import Llama
+
+        with open(os.devnull, "w") as devnull:
+            old_stderr, sys.stderr = sys.stderr, devnull
+            try:
+                self._llm = Llama(
+                    model_path=str(path),
+                    n_ctx=2048,
+                    n_threads=4,
+                    verbose=False,
+                )
+            finally:
+                sys.stderr = old_stderr
 
     def _call_llm(self, prompt: str) -> list[dict]:
         self._load_llm()

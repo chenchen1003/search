@@ -132,14 +132,23 @@ class DomainWiki:
         if not path.exists():
             raise FileNotFoundError(f"LLM model not found: {llm_model_path}")
 
+        import os
+        import sys
         from llama_cpp import Llama
 
-        llm = Llama(
-            model_path=str(path),
-            n_ctx=4096,
-            n_threads=4,
-            verbose=False,
-        )
+        # llama.cpp prints an informational n_ctx warning to stderr even when
+        # verbose=False. Suppress it by redirecting stderr during model load.
+        with open(os.devnull, "w") as devnull:
+            old_stderr, sys.stderr = sys.stderr, devnull
+            try:
+                llm = Llama(
+                    model_path=str(path),
+                    n_ctx=4096,
+                    n_threads=4,
+                    verbose=False,
+                )
+            finally:
+                sys.stderr = old_stderr
 
         # Use a tight sample — 200 chars per chunk keeps the prompt well within 4096 tokens
         sample_text = "\n---\n".join(t[:200] for t in chunk_texts)
