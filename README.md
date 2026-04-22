@@ -14,6 +14,25 @@ knowledge index ./my-notes  # index a folder
 knowledge search "query"    # search
 ```
 
+### Ubuntu, Debian, and WSL
+
+On these systems the distro Python is **externally managed** ([PEP 668](https://peps.python.org/pep-0668/)), so running `pip install` without a virtual environment fails with `externally-managed-environment`. Use a venv in the project directory (or any path you prefer), then install as usual:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install -e .
+```
+
+Keep the venv activated when you run `knowledge` or `python -m knowledge.api` so the CLI and dependencies resolve correctly.
+
+If `python3 -m venv` is missing:
+
+```bash
+sudo apt install python3-venv python3-full
+```
+
 ## Models
 
 Place GGUF files in the `models/` folder (already in `.gitignore`):

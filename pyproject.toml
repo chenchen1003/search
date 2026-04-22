@@ -9,3 +9,6 @@ requires-python = ">=3.9"
 
 [project.scripts]
 knowledge = "knowledge.cli.main:app"
+
+[tool.setuptools.packages.find]
+include = ["knowledge*"]
