@@ -8,15 +8,16 @@ No cloud API required — embeddings and re-ranking run entirely on-device via G
 ```bash
 pip install -r requirements.txt
 pip install -e .
-cp .env.example .env        # review defaults, adjust paths if needed
+cp .env.example .env          # review defaults, adjust paths if needed
 
-knowledge index ./my-notes  # index a folder
-knowledge search "query"    # search
+knowledge index ./my-notes    # index a folder
+knowledge wiki generate       # build domain wiki (improves relevance, optional)
+knowledge search "query"      # search
 ```
 
 ### Ubuntu, Debian, and WSL
 
-On these systems the distro Python is **externally managed** ([PEP 668](https://peps.python.org/pep-0668/)), so running `pip install` without a virtual environment fails with `externally-managed-environment`. Use a venv in the project directory (or any path you prefer), then install as usual:
+On these systems the distro Python is **externally managed** ([PEP 668](https://peps.python.org/pep-0668/)), so running `pip install` without a virtual environment fails with `externally-managed-environment`. Use a venv in the project directory (or any path you prefer):
 
 ```bash
 python3 -m venv .venv
@@ -25,7 +26,7 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-Keep the venv activated when you run `knowledge` or `python -m knowledge.api` so the CLI and dependencies resolve correctly.
+Keep the venv activated when you run `knowledge` or `python -m knowledge.api`.
 
 If `python3 -m venv` is missing:
 
@@ -39,8 +40,8 @@ Place GGUF files in the `models/` folder (already in `.gitignore`):
 
 | File | Purpose |
 |------|---------|
-| `Qwen3-Embedding-0.6B-Q8_0.gguf` | Embeddings (required) |
-| `Qwen2.5-Coder-1.5B-Instruct-Q8_0.gguf` | Re-ranking LLM (optional, used with `--rerank`) |
+| `Qwen3-Embedding-0.6B-Q8_0.gguf` | Embeddings — **required** |
+| `Qwen2.5-Coder-1.5B-Instruct-Q8_0.gguf` | LLM for wiki generation and re-ranking — **optional** |
 
 Download from HuggingFace:
 - [Qwen/Qwen3-Embedding-0.6B-GGUF](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF)
@@ -55,17 +56,46 @@ CMAKE_ARGS="-DLLAMA_METAL=on" pip install llama-cpp-python --force-reinstall --n
 
 ## CLI Usage
 
+### Indexing
+
 ```bash
 knowledge index ./my-notes              # index a folder (md, txt, csv, json, html)
 knowledge index ./notes/article.html    # index a single file
+knowledge index ./my-notes --update-wiki  # index + regenerate domain wiki in one step
+knowledge delete ./my-notes/old.md      # remove a file from the index
+```
 
-knowledge search "query here"           # semantic search (default top 5)
+After indexing, if a domain wiki already exists the command prints a reminder to refresh it.
+
+### Searching
+
+```bash
+knowledge search "query here"           # semantic search, default top 5
 knowledge search "query" --top-k 10     # return more results
 knowledge search "query" --type md      # filter by file type
 knowledge search "query" --no-hybrid    # pure vector search (faster, less precise)
 knowledge search "query" --rerank       # re-rank with local LLM (slower, most accurate)
+knowledge search "query" --no-intent    # skip intent check (always search regardless of topic)
+```
 
-knowledge delete ./my-notes/old.md      # remove a file from the index
+### Domain Wiki
+
+The domain wiki is a short markdown file (`domain-data/domain.md`) that describes what your index contains. It is used as an **intent gate** — queries that do not match the domain are rejected before the vector search even runs, so off-topic queries return nothing instead of noisy results.
+
+```bash
+knowledge wiki generate       # sample index → LLM → save domain-data/domain.md
+knowledge wiki show           # print the current wiki
+knowledge wiki path           # print the file path (useful for shell scripting)
+```
+
+After generating, you can **edit `domain-data/domain.md` by hand** to improve accuracy. Changes take effect immediately — the embedding cache (`domain-data/domain_emb.json`) is automatically invalidated when the file is saved via the CLI.
+
+**Workflow after a major data change:**
+```bash
+knowledge index ./new-data --update-wiki   # one step: index + regenerate wiki
+# — or separately —
+knowledge index ./new-data
+knowledge wiki generate
 ```
 
 ## API Server
@@ -84,7 +114,15 @@ python -m knowledge.api
 
 `POST /search` body:
 ```json
-{ "query": "rainy day hiking", "top_k": 5, "file_type": null, "rerank": false, "hybrid": true }
+{
+  "query": "rainy day hiking",
+  "top_k": 5,
+  "file_type": null,
+  "rerank": false,
+  "hybrid": true,
+  "min_score": 0.45,
+  "intent_check": true
+}
 ```
 
 ## Configuration
@@ -94,8 +132,11 @@ Copy `.env.example` to `.env` and edit as needed. All values can also be set as 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `EMBED_MODEL` | `models/Qwen3-Embedding-0.6B-Q8_0.gguf` | Embedding model — GGUF path or HF repo id |
-| `LLM_MODEL` | `models/Qwen2.5-Coder-1.5B-Instruct-Q8_0.gguf` | Re-ranking LLM — GGUF path |
-| `CHROMA_DIR` | `./chroma` | Vector DB storage — project-local by default |
+| `LLM_MODEL` | `models/Qwen2.5-Coder-1.5B-Instruct-Q8_0.gguf` | LLM for wiki generation and re-ranking |
+| `CHROMA_DIR` | `./chroma` | Vector DB storage |
+| `DOMAIN_WIKI_PATH` | `./domain-data/domain.md` | Domain wiki file path |
+| `DOMAIN_EMB_PATH` | `./domain-data/domain_emb.json` | Cached wiki embedding (auto-generated) |
+| `INTENT_THRESHOLD` | `0.25` | Minimum cosine similarity to pass intent gate |
 | `CHUNK_SIZE` | `400` | Words per chunk (txt, html) |
 | `CHUNK_OVERLAP` | `50` | Overlap between chunks |
 | `API_PORT` | `8000` | REST API port |
@@ -119,13 +160,14 @@ CHROMA_DIR=~/.local/share/knowledge/chroma
 
 ## How Search Works
 
-Search runs in up to three stages:
+Search runs in up to four stages:
 
-1. **Vector retrieval** — cosine similarity against the ChromaDB embedding index (always on)
-2. **Hybrid re-rank** — combines vector rank with BM25 keyword score using Reciprocal Rank Fusion; on by default (`--no-hybrid` to skip)
-3. **LLM re-rank** — an on-device LLM scores each passage for relevance; opt-in with `--rerank`
+1. **Intent gate** — embeds the query and compares it to the domain wiki via cosine similarity; queries below the threshold (`INTENT_THRESHOLD`, default 0.25) return nothing immediately. Requires `knowledge wiki generate` to have been run at least once; skipped silently if no wiki exists. Disable per-query with `--no-intent`.
+2. **Vector retrieval** — cosine similarity against the ChromaDB embedding index (always on)
+3. **Hybrid re-rank** — combines vector rank with BM25 keyword score using Reciprocal Rank Fusion; on by default (`--no-hybrid` to skip)
+4. **LLM re-rank** — an on-device LLM scores each passage for relevance; opt-in with `--rerank`
 
-Hybrid mode significantly improves results for queries containing specific terms (product names, category codes, etc.) by ensuring exact keyword matches aren't buried by semantic similarity alone.
+The `min_score` filter (default 0.45) additionally suppresses individual results whose raw cosine similarity is too low, acting as a fallback even when intent checking is off.
 
 ### Score interpretation
 
@@ -135,7 +177,15 @@ Hybrid mode significantly improves results for queries containing specific terms
 | default (hybrid) | RRF-normalised (0–1); top result is always 1.0 |
 | `--rerank` | LLM relevance score normalised to 0–1 |
 
-ChromaDB always returns the requested `top_k` results regardless of score. Use `--rerank` when ordering matters most and you can afford the extra latency.
+### Domain wiki and intent scores
+
+| Intent score | Meaning |
+|---|---|
+| < 0.25 | Query is out of scope — returns no results |
+| 0.25 – 0.45 | Borderline; in-scope but loosely related |
+| > 0.45 | Clearly in scope |
+
+The wiki lives at `domain-data/domain.md` (committed to git so your team can share and edit it). The embedding cache `domain-data/domain_emb.json` is excluded from git and rebuilt automatically when the wiki changes.
 
 ## Tests
 
