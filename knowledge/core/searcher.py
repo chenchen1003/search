@@ -85,6 +85,7 @@ class Searcher:
         file_type: str | None = None,
         rerank: bool = False,
         hybrid: bool = True,
+        min_score: float = 0.45,
     ) -> list[SearchResult]:
         # Fetch a larger candidate pool when hybrid or rerank passes are needed
         fetch_k = top_k * _HYBRID_FETCH_MULTIPLIER if (hybrid or rerank) else top_k
@@ -101,6 +102,15 @@ class Searcher:
             )
             for h in hits
         ]
+
+        # Filter by raw cosine similarity BEFORE RRF normalization can hide low relevance.
+        # Good domain matches score ~0.5–0.7; spurious cross-domain matches score ~0.3–0.4.
+        # Filtering individually removes weak candidates and returns nothing when the whole
+        # query is off-topic (no result clears the bar).
+        if min_score > 0 and results:
+            results = [r for r in results if r.score >= min_score]
+            if not results:
+                return []
 
         if hybrid and results:
             results = self._hybrid_rerank(query, results, top_k)
