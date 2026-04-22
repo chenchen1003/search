@@ -2,6 +2,8 @@
 models/*.gguf
 # ChromaDB vector store (project-local default; override with CHROMA_DIR env var)
 chroma/
+# Domain wiki and embedding cache (generated locally, editable)
+domain-data/domain_emb.json
 .venv/
 __pycache__/
 *.pyc

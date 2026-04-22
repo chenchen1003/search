@@ -82,38 +82,40 @@ def wiki_generate(
     model: str = typer.Option(settings.embed_model, help="Embedding model name"),
     llm_model: str = typer.Option(settings.llm_model, help="LLM model path for wiki generation"),
     n_samples: int = typer.Option(10, "--samples", help="Number of random chunks to sample"),
+    wiki_path: Path = typer.Option(settings.domain_wiki_path, help="Path to save domain wiki"),
 ) -> None:
     """Generate the domain wiki by sampling indexed chunks and asking the local LLM."""
     typer.echo(f"Sampling {n_samples} chunks from index...")
-    searcher = Searcher(chroma_dir=chroma_dir, embed_model=model, llm_model=llm_model)
+    searcher = Searcher(
+        chroma_dir=chroma_dir, embed_model=model, llm_model=llm_model,
+        wiki_path=wiki_path, emb_cache_path=wiki_path.parent / "domain_emb.json",
+    )
     try:
         content = searcher.generate_wiki(n_samples=n_samples)
     except (RuntimeError, FileNotFoundError) as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
-    wiki_path = chroma_dir / "domain.md"
     typer.echo(f"\nWiki saved to {wiki_path}\n")
     typer.echo(content)
 
 
 @wiki_app.command("show")
 def wiki_show(
-    chroma_dir: Path = typer.Option(settings.chroma_dir, help="ChromaDB storage path"),
+    wiki_path: Path = typer.Option(settings.domain_wiki_path, help="Path to domain wiki"),
 ) -> None:
     """Print the current domain wiki."""
-    wiki_path = chroma_dir / "domain.md"
     if not wiki_path.exists():
-        typer.echo("No domain wiki found. Run: knowledge wiki generate", err=True)
+        typer.echo(f"No domain wiki found at {wiki_path}. Run: knowledge wiki generate", err=True)
         raise typer.Exit(1)
     typer.echo(wiki_path.read_text(encoding="utf-8"))
 
 
 @wiki_app.command("path")
 def wiki_path_cmd(
-    chroma_dir: Path = typer.Option(settings.chroma_dir, help="ChromaDB storage path"),
+    wiki_path: Path = typer.Option(settings.domain_wiki_path, help="Path to domain wiki"),
 ) -> None:
     """Print the path to the domain wiki file (useful for shell scripting)."""
-    typer.echo(chroma_dir / "domain.md")
+    typer.echo(wiki_path)
 
 
 if __name__ == "__main__":

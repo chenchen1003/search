@@ -51,19 +51,14 @@ class Settings(BaseSettings):
     chunk_size: int = 400
     chunk_overlap: int = 50
     api_port: int = 8000
-    # Intent analysis — paths are derived from chroma_dir at runtime (see model_validator)
-    domain_wiki_path: Path = PACKAGE_ROOT / "chroma" / "domain.md"
-    domain_emb_path: Path = PACKAGE_ROOT / "chroma" / "domain_emb.json"
+    # Intent analysis — stored in domain-data/ alongside the index
+    domain_wiki_path: Path = PACKAGE_ROOT / "domain-data" / "domain.md"
+    domain_emb_path: Path = PACKAGE_ROOT / "domain-data" / "domain_emb.json"
     intent_threshold: float = 0.25
 
     @model_validator(mode="after")
     def _resolve_paths(self) -> "Settings":
         self.embed_model = resolve_embed_model(self.embed_model)
-        # Keep domain paths in sync with chroma_dir if user overrides it
-        if self.domain_wiki_path == PACKAGE_ROOT / "chroma" / "domain.md":
-            self.domain_wiki_path = self.chroma_dir / "domain.md"
-        if self.domain_emb_path == PACKAGE_ROOT / "chroma" / "domain_emb.json":
-            self.domain_emb_path = self.chroma_dir / "domain_emb.json"
         return self
 
 
