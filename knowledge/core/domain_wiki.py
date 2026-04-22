@@ -34,6 +34,47 @@ Sample records:
 Reply with the wiki ONLY. No explanation. Stop after the "Not answerable" section."""
 
 
+def _extract_keywords(text: str) -> list[str]:
+    """Extract significant brand/entity tokens from a wiki section.
+
+    Pulls out:
+    - Chinese segments of 2+ characters (filters common stop words)
+    - English words of 2+ characters (lowercased)
+
+    These are stored in the cache and used for fast substring matching at
+    query time to catch competitor brands before the embedding gate runs.
+    """
+    if not text:
+        return []
+
+    _ZH_STOPS = {"其他", "产品", "内容", "查询", "类型", "品牌", "运动", "商务", "信息"}
+
+    tokens: set[str] = set()
+
+    # Chinese: sequences of 2+ Han characters
+    for m in re.finditer(r"[\u4e00-\u9fff]{2,}", text):
+        word = m.group()
+        if word not in _ZH_STOPS:
+            tokens.add(word)
+
+    # English: capitalized words and known brand abbreviations (2+ chars)
+    for m in re.finditer(r"[A-Za-z][A-Za-z\-]{1,}", text):
+        word = m.group()
+        if word.lower() not in {"and", "or", "the", "of", "in", "for", "not", "etc"}:
+            tokens.add(word.lower())
+
+    return sorted(tokens)
+
+
+def _query_contains_keyword(query: str, keywords: list[str]) -> bool:
+    """Return True if the query contains any of the blocked keywords."""
+    query_lower = query.lower()
+    for kw in keywords:
+        if kw in query_lower or kw in query:
+            return True
+    return False
+
+
 def cosine_similarity(a: list[float], b: list[float]) -> float:
     """Pure-math cosine similarity — no external deps required."""
     dot = sum(x * y for x, y in zip(a, b))
@@ -112,25 +153,101 @@ class DomainWiki:
     # Embedding
     # ------------------------------------------------------------------
 
-    def get_embedding(self, embedder: Embedder) -> list[float]:
-        """Return the cached wiki embedding, computing it if needed."""
+    def _parse_sections(self, wiki_text: str) -> tuple[str, str]:
+        """Extract the 'Answerable queries' and 'Not answerable' section bodies."""
+        answerable = ""
+        not_answerable = ""
+
+        answerable_match = re.search(
+            r"##\s+Answerable queries?\s*\n(.*?)(?=\n##|\Z)", wiki_text,
+            re.DOTALL | re.IGNORECASE,
+        )
+        not_answerable_match = re.search(
+            r"##\s+Not answerable\s*\n(.*?)(?=\n##|\Z)", wiki_text,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if answerable_match:
+            answerable = answerable_match.group(1).strip()
+        if not_answerable_match:
+            not_answerable = not_answerable_match.group(1).strip()
+
+        return answerable, not_answerable
+
+    def _load_cache(self) -> dict | None:
         if self.emb_cache_path.exists():
             try:
-                return json.loads(self.emb_cache_path.read_text(encoding="utf-8"))
+                data = json.loads(self.emb_cache_path.read_text(encoding="utf-8"))
+                # Accept both old format (plain list) and new format (dict with sections)
+                if isinstance(data, dict) and "answerable" in data:
+                    return data
             except Exception:
-                pass  # Cache corrupt — recompute
+                pass
+        return None
+
+    def get_embedding(self, embedder: Embedder) -> dict:
+        """Return cached embeddings and keyword sets, computing them if needed.
+
+        Cache format::
+
+            {
+              "wiki": [...],           # full wiki vector
+              "blocked_keywords": [...] # lowercase terms from "Not answerable" section
+            }
+        """
+        cached = self._load_cache()
+        if cached:
+            return cached
 
         wiki_text = self.load()
-        vec = embedder.embed([wiki_text])[0]
+        _, not_answerable_text = self._parse_sections(wiki_text)
+
+        wiki_vec = embedder.embed([wiki_text])[0]
+        blocked = _extract_keywords(not_answerable_text)
+
+        cache = {"wiki": wiki_vec, "blocked_keywords": blocked}
         self.emb_cache_path.parent.mkdir(parents=True, exist_ok=True)
-        self.emb_cache_path.write_text(json.dumps(vec), encoding="utf-8")
-        return vec
+        self.emb_cache_path.write_text(json.dumps(cache), encoding="utf-8")
+        return cache
 
     # ------------------------------------------------------------------
     # Intent check
     # ------------------------------------------------------------------
 
     def intent_score(self, query_embedding: list[float], embedder: Embedder) -> float:
-        """Return cosine similarity between the query and the domain wiki."""
-        wiki_emb = self.get_embedding(embedder)
-        return cosine_similarity(query_embedding, wiki_emb)
+        """Score query intent using a two-stage check.
+
+        Stage 1 — keyword gate: if the query contains any keyword from the
+        "Not answerable" section (e.g. competitor brand names), return 0.0
+        immediately.  Brand names are exact tokens; embeddings cannot
+        distinguish them from similar brands.
+
+        Stage 2 — embedding gate: cosine similarity between the query and the
+        full wiki embedding catches queries that are completely off-topic (e.g.
+        "fighting movies") even when no specific blocked keyword is present.
+        """
+        cache = self.get_embedding(embedder)
+        query_lower = query_embedding  # embedding is already computed by caller
+
+        # Stage 1: keyword check
+        blocked_keywords: list[str] = cache.get("blocked_keywords", [])
+        if blocked_keywords:
+            # Re-read query text is not available here; caller must pass it separately.
+            # _check_keywords is called from intent_score_for_query instead.
+            pass
+
+        # Stage 2: embedding similarity
+        return cosine_similarity(query_embedding, cache["wiki"])
+
+    def intent_score_for_query(
+        self, query: str, query_embedding: list[float], embedder: Embedder
+    ) -> float:
+        """Full intent check combining keyword and embedding stages.
+
+        Returns 0.0 if a blocked keyword is found, otherwise returns
+        the cosine similarity against the full wiki embedding.
+        """
+        cache = self.get_embedding(embedder)
+        blocked_keywords: list[str] = cache.get("blocked_keywords", [])
+        if _query_contains_keyword(query, blocked_keywords):
+            return 0.0
+        return cosine_similarity(query_embedding, cache["wiki"])

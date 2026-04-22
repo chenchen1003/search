@@ -161,11 +161,11 @@ class Searcher:
         return results[:top_k]
 
     def _intent_score(self, query: str) -> float:
-        """Embed the query and return its cosine similarity to the domain wiki."""
+        """Embed the query and run the two-stage intent check (keyword + embedding)."""
         from knowledge.core.domain_wiki import DomainWiki
         wiki = DomainWiki(self._wiki_path, self._emb_cache_path)
         query_vec = self._index.embedder.embed([query])[0]
-        return wiki.intent_score(query_vec, self._index.embedder)
+        return wiki.intent_score_for_query(query, query_vec, self._index.embedder)
 
     def _hybrid_rerank(
         self, query: str, results: list[SearchResult], top_k: int
