@@ -83,7 +83,9 @@ knowledge search "query" --no-intent    # skip intent check (always search regar
 The domain wiki is a short markdown file (`domain-data/domain.md`) that describes what your index contains. It is used as an **intent gate** — queries that do not match the domain are rejected before the vector search even runs, so off-topic queries return nothing instead of noisy results.
 
 ```bash
-knowledge wiki generate             # sample index → LLM → save domain-data/domain.md
+knowledge wiki generate --preview   # generate a draft and print it WITHOUT saving (review first)
+knowledge wiki generate             # generate and prompt before overwriting existing wiki
+knowledge wiki generate --force     # generate and overwrite without prompting
 knowledge wiki show                 # print the current wiki
 knowledge wiki path                 # print the file path (useful for shell scripting)
 knowledge wiki validate             # audit the block list and detect section conflicts

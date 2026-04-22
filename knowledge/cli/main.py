@@ -30,10 +30,11 @@ def index(
     typer.echo(f"Indexed {total} chunk(s) from {path}")
 
     if update_wiki:
-        typer.echo("Regenerating domain wiki...")
+        typer.echo("Regenerating domain wiki (this may take ~30s)...")
         try:
             content = searcher.generate_wiki()
             typer.echo(f"Wiki updated at {settings.domain_wiki_path}")
+            typer.echo("Tip: run `knowledge wiki validate` to check for keyword conflicts.")
         except (RuntimeError, FileNotFoundError) as e:
             typer.echo(f"Warning: wiki generation failed — {e}", err=True)
     elif settings.domain_wiki_path.exists():
@@ -96,20 +97,56 @@ def wiki_generate(
     llm_model: str = typer.Option(settings.llm_model, help="LLM model path for wiki generation"),
     n_samples: int = typer.Option(10, "--samples", help="Number of random chunks to sample"),
     wiki_path: Path = typer.Option(settings.domain_wiki_path, help="Path to save domain wiki"),
+    preview: bool = typer.Option(False, "--preview", help="Print generated wiki without saving (review before committing)"),
+    force: bool = typer.Option(False, "--force", help="Overwrite existing wiki without prompting"),
 ) -> None:
-    """Generate the domain wiki by sampling indexed chunks and asking the local LLM."""
+    """Generate the domain wiki by sampling indexed chunks and asking the local LLM.
+
+    The generated output is a starting point — review it with --preview first,
+    then edit domain-data/domain.md manually to improve accuracy.
+    Run `knowledge wiki validate` after any edits to check for conflicts.
+    """
     typer.echo(f"Sampling {n_samples} chunks from index...")
+
+    # Generate only (no save) so we can preview before deciding
+    from knowledge.core.domain_wiki import DomainWiki
+    emb_cache = wiki_path.parent / "domain_emb.json"
     searcher = Searcher(
         chroma_dir=chroma_dir, embed_model=model, llm_model=llm_model,
-        wiki_path=wiki_path, emb_cache_path=wiki_path.parent / "domain_emb.json",
+        wiki_path=wiki_path, emb_cache_path=emb_cache,
     )
+    chunks = searcher._index.sample_chunks(n_samples)
+    if not chunks:
+        typer.echo("Error: index is empty — run 'knowledge index' first.", err=True)
+        raise typer.Exit(1)
+
+    wiki = DomainWiki(wiki_path, emb_cache)
     try:
-        content = searcher.generate_wiki(n_samples=n_samples)
+        content = wiki.generate(chunks, llm_model)
     except (RuntimeError, FileNotFoundError) as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
-    typer.echo(f"\nWiki saved to {wiki_path}\n")
+
+    typer.echo("\n" + "─" * 60)
     typer.echo(content)
+    typer.echo("─" * 60)
+
+    if preview:
+        typer.echo("\n[preview mode] Wiki NOT saved. Edit domain-data/domain.md manually or re-run without --preview to save.")
+        return
+
+    # If a wiki already exists, confirm before overwriting
+    if wiki_path.exists() and not force:
+        typer.echo(f"\nA wiki already exists at {wiki_path}.")
+        typer.echo("The LLM output above is a draft. Small models often produce imperfect output.")
+        overwrite = typer.confirm("Overwrite the existing wiki with this draft?", default=False)
+        if not overwrite:
+            typer.echo("Cancelled. Edit domain-data/domain.md manually to update the wiki.")
+            return
+
+    wiki.save(content)
+    typer.echo(f"\nWiki saved to {wiki_path}")
+    typer.echo("Tip: run `knowledge wiki validate` to check for keyword conflicts.")
 
 
 @wiki_app.command("show")
