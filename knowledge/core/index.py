@@ -89,3 +89,18 @@ class VectorIndex:
 
     def count(self) -> int:
         return self._collection.count()
+
+    def sample_chunks(self, n: int = 30) -> list[str]:
+        """Return up to n random document texts from the collection for domain profiling."""
+        import random
+        total = self._collection.count()
+        if total == 0:
+            return []
+        all_ids = self._collection.get(include=[])["ids"]
+        sample_ids = random.sample(all_ids, min(n, len(all_ids)))
+        result = self._collection.get(ids=sample_ids, include=["documents"])
+        return result["documents"] or []
+
+    @property
+    def embedder(self) -> "Embedder":
+        return self._embedder

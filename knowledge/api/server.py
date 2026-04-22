@@ -25,6 +25,7 @@ class SearchRequest(BaseModel):
     rerank: bool = False
     hybrid: bool = True
     min_score: float = 0.45
+    intent_check: bool = True
 
 
 class SearchResult(BaseModel):
@@ -65,7 +66,7 @@ def create_app(chroma_dir: Path, embed_model: str) -> FastAPI:
         results = searcher.search(
             req.query, top_k=req.top_k,
             file_type=req.file_type, rerank=req.rerank, hybrid=req.hybrid,
-            min_score=req.min_score,
+            min_score=req.min_score, intent_check=req.intent_check,
         )
         return [SearchResult(**vars(r)) for r in results]
 

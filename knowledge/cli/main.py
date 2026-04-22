@@ -9,6 +9,8 @@ from knowledge.config import settings
 from knowledge.core.searcher import Searcher
 
 app = typer.Typer(help="Local knowledge semantic search engine.")
+wiki_app = typer.Typer(help="Manage the domain knowledge wiki used for intent analysis.")
+app.add_typer(wiki_app, name="wiki")
 
 
 def _make_searcher(chroma_dir: Path, model: str) -> Searcher:
@@ -34,13 +36,22 @@ def search(
     file_type: Optional[str] = typer.Option(None, "--type", help="Filter by file type"),
     rerank: bool = typer.Option(False, "--rerank/--no-rerank", help="Re-rank results with local LLM"),
     hybrid: bool = typer.Option(True, "--hybrid/--no-hybrid", help="Combine vector + BM25 keyword scoring (default: on)"),
+    intent: bool = typer.Option(True, "--intent/--no-intent", help="Check query intent against domain wiki before searching (default: on)"),
     min_score: float = typer.Option(0.45, "--min-score", help="Minimum raw vector similarity (0–1); results below this are suppressed"),
     chroma_dir: Path = typer.Option(settings.chroma_dir, help="ChromaDB storage path"),
     model: str = typer.Option(settings.embed_model, help="Embedding model name"),
 ) -> None:
     """Semantic search over indexed files."""
     searcher = _make_searcher(chroma_dir, model)
-    results = searcher.search(query, top_k=top_k, file_type=file_type, rerank=rerank, hybrid=hybrid, min_score=min_score)
+    results = searcher.search(
+        query,
+        top_k=top_k,
+        file_type=file_type,
+        rerank=rerank,
+        hybrid=hybrid,
+        min_score=min_score,
+        intent_check=intent,
+    )
     if not results:
         typer.echo("No results found.")
         return
@@ -59,6 +70,50 @@ def delete(
     searcher = _make_searcher(chroma_dir, model)
     deleted = searcher.delete(path)
     typer.echo(f"Deleted {deleted} chunk(s) for {path}")
+
+
+# ---------------------------------------------------------------------------
+# knowledge wiki sub-commands
+# ---------------------------------------------------------------------------
+
+@wiki_app.command("generate")
+def wiki_generate(
+    chroma_dir: Path = typer.Option(settings.chroma_dir, help="ChromaDB storage path"),
+    model: str = typer.Option(settings.embed_model, help="Embedding model name"),
+    llm_model: str = typer.Option(settings.llm_model, help="LLM model path for wiki generation"),
+    n_samples: int = typer.Option(10, "--samples", help="Number of random chunks to sample"),
+) -> None:
+    """Generate the domain wiki by sampling indexed chunks and asking the local LLM."""
+    typer.echo(f"Sampling {n_samples} chunks from index...")
+    searcher = Searcher(chroma_dir=chroma_dir, embed_model=model, llm_model=llm_model)
+    try:
+        content = searcher.generate_wiki(n_samples=n_samples)
+    except (RuntimeError, FileNotFoundError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+    wiki_path = chroma_dir / "domain.md"
+    typer.echo(f"\nWiki saved to {wiki_path}\n")
+    typer.echo(content)
+
+
+@wiki_app.command("show")
+def wiki_show(
+    chroma_dir: Path = typer.Option(settings.chroma_dir, help="ChromaDB storage path"),
+) -> None:
+    """Print the current domain wiki."""
+    wiki_path = chroma_dir / "domain.md"
+    if not wiki_path.exists():
+        typer.echo("No domain wiki found. Run: knowledge wiki generate", err=True)
+        raise typer.Exit(1)
+    typer.echo(wiki_path.read_text(encoding="utf-8"))
+
+
+@wiki_app.command("path")
+def wiki_path_cmd(
+    chroma_dir: Path = typer.Option(settings.chroma_dir, help="ChromaDB storage path"),
+) -> None:
+    """Print the path to the domain wiki file (useful for shell scripting)."""
+    typer.echo(chroma_dir / "domain.md")
 
 
 if __name__ == "__main__":

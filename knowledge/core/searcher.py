@@ -8,6 +8,8 @@ from knowledge.core.index import VectorIndex
 from knowledge.core.parser import parse_file
 from knowledge.config import settings
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class SearchResult:
@@ -60,9 +62,21 @@ def _rrf_combine(
 
 
 class Searcher:
-    def __init__(self, chroma_dir: Path, embed_model: str, llm_model: str | None = None) -> None:
+    def __init__(
+        self,
+        chroma_dir: Path,
+        embed_model: str,
+        llm_model: str | None = None,
+        wiki_path: Path | None = None,
+        emb_cache_path: Path | None = None,
+        intent_threshold: float | None = None,
+    ) -> None:
         self._index = VectorIndex(chroma_dir=chroma_dir, embed_model=embed_model)
         self._llm_model = llm_model or settings.llm_model
+        chroma_dir = Path(chroma_dir)
+        self._wiki_path = wiki_path or (chroma_dir / "domain.md")
+        self._emb_cache_path = emb_cache_path or (chroma_dir / "domain_emb.json")
+        self._intent_threshold = intent_threshold if intent_threshold is not None else settings.intent_threshold
 
     def index_path(self, path: Path) -> int:
         path = Path(path)
@@ -78,6 +92,17 @@ class Searcher:
         chunks = parse_file(path)
         return self._index.add(chunks)
 
+    def generate_wiki(self, n_samples: int = 10) -> str:
+        """Sample chunks from the index, call the LLM, persist wiki + clear emb cache."""
+        from knowledge.core.domain_wiki import DomainWiki
+        wiki = DomainWiki(self._wiki_path, self._emb_cache_path)
+        chunks = self._index.sample_chunks(n_samples)
+        if not chunks:
+            raise RuntimeError("Index is empty — run 'knowledge index' first.")
+        content = wiki.generate(chunks, self._llm_model)
+        wiki.save(content)
+        return content
+
     def search(
         self,
         query: str,
@@ -86,7 +111,20 @@ class Searcher:
         rerank: bool = False,
         hybrid: bool = True,
         min_score: float = 0.45,
+        intent_check: bool = True,
     ) -> list[SearchResult]:
+        # Intent gate: compare query embedding against domain wiki embedding.
+        # Runs only when domain.md exists; fails silently so existing setups
+        # are unaffected until the user runs `knowledge wiki generate`.
+        if intent_check and self._wiki_path.exists():
+            score = self._intent_score(query)
+            if score < self._intent_threshold:
+                logger.debug(
+                    "Intent check rejected query %r (score %.3f < threshold %.3f)",
+                    query, score, self._intent_threshold,
+                )
+                return []
+
         # Fetch a larger candidate pool when hybrid or rerank passes are needed
         fetch_k = top_k * _HYBRID_FETCH_MULTIPLIER if (hybrid or rerank) else top_k
         hits = self._index.query(query, top_k=fetch_k, file_type=file_type)
@@ -121,6 +159,13 @@ class Searcher:
             results = reranker.rerank(query, results)
 
         return results[:top_k]
+
+    def _intent_score(self, query: str) -> float:
+        """Embed the query and return its cosine similarity to the domain wiki."""
+        from knowledge.core.domain_wiki import DomainWiki
+        wiki = DomainWiki(self._wiki_path, self._emb_cache_path)
+        query_vec = self._index.embedder.embed([query])[0]
+        return wiki.intent_score(query_vec, self._index.embedder)
 
     def _hybrid_rerank(
         self, query: str, results: list[SearchResult], top_k: int
